@@ -1,0 +1,63 @@
+name: Build Bliss Kernel with KernelSU Next
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            clang lld llvm make gcc g++ \
+            bison flex libssl-dev libelf-dev bc \
+            cpio kmod zlib1g-dev python3 xz-utils
+
+      - name: Clone Gloria Kernel 6.1
+        run: |
+          git clone --depth=1 -b gloria https://github.com/hmtheboy154/Darkmatter-kernel.git kernel_source
+
+      - name: Integrate KernelSU-Next
+        run: |
+          cd kernel_source
+          # Remove legacy KernelSU symlinks if present
+          rm -rf drivers/kernelsu KernelSU
+          # Inject latest KernelSU Next
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+
+      - name: Apply Tablet Hardware Configuration
+        run: |
+          cd kernel_source
+          if [ -f ../bliss_kernel.config ]; then
+            cp -f ../bliss_kernel.config .config
+            echo "[+] Applied extracted bliss_kernel.config successfully!"
+          else
+            make ARCH=x86_64 android-x86_64_defconfig
+            echo "[+] Applied android-x86_64_defconfig!"
+          fi
+          # Ensure KernelSU Next configs are active
+          scripts/config --enable CONFIG_KSU
+          scripts/config --disable CONFIG_KSU_DEBUG
+          scripts/config --enable CONFIG_OVERLAY_FS
+
+      - name: Compile Linux Kernel (bzImage)
+        run: |
+          cd kernel_source
+          make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 -j$(nproc) bzImage
+
+      - name: Prepare Final Output
+        run: |
+          cp -f kernel_source/arch/x86/boot/bzImage ./kernel
+          ls -lh ./kernel
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bliss-kernel-ksu-next
+          path: kernel
+          retention-days: 7
