@@ -27,8 +27,12 @@ jobs:
           cd kernel_source
           # Remove legacy KernelSU symlinks if present
           rm -rf drivers/kernelsu KernelSU
-          # Inject latest KernelSU Next
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+          # Inject latest KernelSU Next (using branch next which contains linux/init.h fix)
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s -- next
+          # Ensure linux/init.h is included in sulog.h
+          if [ -f drivers/kernelsu/feature/sulog.h ]; then
+            grep -q '<linux/init.h>' drivers/kernelsu/feature/sulog.h || sed -i '/linux\/types.h/a #include <linux/init.h>' drivers/kernelsu/feature/sulog.h
+          fi
 
       - name: Apply Tablet Hardware Configuration
         run: |
