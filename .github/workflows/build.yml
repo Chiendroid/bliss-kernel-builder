@@ -88,9 +88,11 @@ jobs:
           scripts/config --enable CONFIG_OVERLAY_FS
           scripts/config --set-str CONFIG_LOCALVERSION "-gloria"
 
-          # 5. Disable MODVERSIONS so modules can load without symbol CRC mismatches
-          scripts/config --disable CONFIG_MODVERSIONS
-          scripts/config --disable CONFIG_ASM_MODVERSIONS
+          # 5. Universal Module Compatibility: Patch version.c so ALL stock system modules (Wi-Fi, Bluetooth, Audio, etc.) load seamlessly
+          sed -i 's/Elf_Shdr \*sechdrs = info->sechdrs;/return 1;/' kernel/module/version.c
+          sed -i 's/return strcmp(amagic, bmagic) == 0;/return 1;/' kernel/module/version.c
+          scripts/config --enable CONFIG_MODVERSIONS
+          scripts/config --enable CONFIG_ASM_MODVERSIONS
 
           # 6. Build Intel Iris Xe Graphics (i915) DIRECTLY INTO KERNEL CORE
           scripts/config --enable CONFIG_DRM
