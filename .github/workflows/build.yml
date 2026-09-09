@@ -10,13 +10,25 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies
+      - name: Install Clang 17 and Build Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            clang lld llvm make gcc g++ \
+            clang-17 lld-17 llvm-17 make gcc g++ \
             bison flex libssl-dev libelf-dev bc \
             cpio kmod zlib1g-dev python3 xz-utils
+          # Ensure Clang 17 toolchain is default
+          sudo ln -sf /usr/bin/clang-17 /usr/bin/clang
+          sudo ln -sf /usr/bin/clang++-17 /usr/bin/clang++
+          sudo ln -sf /usr/bin/ld.lld-17 /usr/bin/ld.lld
+          sudo ln -sf /usr/bin/llvm-ar-17 /usr/bin/llvm-ar
+          sudo ln -sf /usr/bin/llvm-nm-17 /usr/bin/llvm-nm
+          sudo ln -sf /usr/bin/llvm-objcopy-17 /usr/bin/llvm-objcopy
+          sudo ln -sf /usr/bin/llvm-objdump-17 /usr/bin/llvm-objdump
+          sudo ln -sf /usr/bin/llvm-readelf-17 /usr/bin/llvm-readelf
+          sudo ln -sf /usr/bin/llvm-strip-17 /usr/bin/llvm-strip
+          clang --version
+          ld.lld --version
 
       - name: Fetch Exact Gloria Kernel (Commit d41d398d)
         run: |
@@ -34,6 +46,35 @@ jobs:
           rm -rf drivers/kernelsu KernelSU KernelSU-Next
           # Inject KernelSU Next using dev branch
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/kernel/setup.sh" | bash -s -- dev
+          # Fix cpufeatures.h header in KernelSU-Next core/init.c
+          if [ -f drivers/kernelsu/core/init.c ]; then
+            sed -i 's/<asm\/cpufeature.h>/<asm\/cpufeatures.h>/' drivers/kernelsu/core/init.c
+          fi
+
+      - name: Apply Native Syscall Redirection Patches
+        run: |
+          cd kernel_source
+          # 1. Set default syscall_hardening to OFF so X86_FEATURE_INDIRECT_SAFE is active by default
+          sed -i 's/SYSCALL_HARDENING_ON;/SYSCALL_HARDENING_OFF;/g' arch/x86/kernel/cpu/common.c
+
+          # 2. Patch arch/x86/entry/common.c to redirect syscalls directly to sys_call_table when INDIRECT_SAFE is active
+          python3 -c "
+          with open('arch/x86/entry/common.c', 'r') as f:
+              c = f.read()
+
+          target = '''\tif (likely(unr < NR_syscalls)) {\n\t\tunr = array_index_nospec(unr, NR_syscalls);\n\t\tregs->ax = x64_sys_call(regs, unr);'''
+          replacement = '''\tif (likely(unr < NR_syscalls)) {\n\t\tunr = array_index_nospec(unr, NR_syscalls);\n\t\tif (likely(cpu_feature_enabled(X86_FEATURE_INDIRECT_SAFE)))\n\t\t\tregs->ax = sys_call_table[unr](regs);\n\t\telse\n\t\t\tregs->ax = x64_sys_call(regs, unr);'''
+
+          if target in c:
+              c = c.replace(target, replacement, 1)
+              with open('arch/x86/entry/common.c', 'w') as f:
+                  f.write(c)
+              print('[+] Patched arch/x86/entry/common.c successfully!')
+          else:
+              print('[!] Target pattern not found in common.c!')
+              exit(1)
+          "
+          git diff arch/x86/entry/common.c arch/x86/kernel/cpu/common.c
 
       - name: Apply Tablet Hardware Configuration and Exact Vermagic
         run: |
@@ -53,7 +94,7 @@ jobs:
           # Ensure KernelSU Next configs are active
           scripts/config --enable CONFIG_KSU
           scripts/config --disable CONFIG_KSU_DEBUG
-          scripts/config --enable CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER
+          scripts/config --disable CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER
           scripts/config --enable CONFIG_OVERLAY_FS
           scripts/config --set-str CONFIG_LOCALVERSION "-gloria-xanmod1"
           make ARCH=x86_64 olddefconfig
