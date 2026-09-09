@@ -2,9 +2,16 @@ name: Build Bliss Kernel with KernelSU Next
 
 on:
   workflow_dispatch:
+    inputs:
+      build_modules:
+        description: 'Also compile and package all kernel modules (~1 hour)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  build:
+  build-kernel:
+    name: Build Kernel Core (Iris Xe Built-in)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -51,7 +58,7 @@ jobs:
             sed -i 's/<asm\/cpufeature.h>/<asm\/cpufeatures.h>/' drivers/kernelsu/core/init.c
           fi
 
-      - name: Configure Kernel and Default Syscall Hardening
+      - name: Configure Kernel and Hardware Features
         run: |
           cd kernel_source
           # 1. Set default syscall_hardening to OFF so X86_FEATURE_INDIRECT_SAFE is active by default
@@ -72,17 +79,43 @@ jobs:
             echo "[+] Applied android-x86_64_defconfig!"
           fi
 
-          # 4. Ensure KernelSU Next configs are active and disable runtime text patch
+          # 4. KernelSU Next & OverlayFS
           scripts/config --enable CONFIG_KSU
           scripts/config --disable CONFIG_KSU_DEBUG
           scripts/config --disable CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER
           scripts/config --enable CONFIG_OVERLAY_FS
           scripts/config --set-str CONFIG_LOCALVERSION "-gloria"
 
-          # 5. Evaluate configs using Clang 17
+          # 5. Disable MODVERSIONS so modules can load without symbol CRC mismatches
+          scripts/config --disable CONFIG_MODVERSIONS
+          scripts/config --disable CONFIG_ASM_MODVERSIONS
+
+          # 6. Build Intel Iris Xe Graphics (i915) DIRECTLY INTO KERNEL CORE
+          scripts/config --enable CONFIG_DRM
+          scripts/config --enable CONFIG_DRM_KMS_HELPER
+          scripts/config --enable CONFIG_DRM_DISPLAY_HELPER
+          scripts/config --enable CONFIG_DRM_DISPLAY_DP_HELPER
+          scripts/config --enable CONFIG_DRM_DISPLAY_HDCP_HELPER
+          scripts/config --enable CONFIG_DRM_DISPLAY_HDMI_HELPER
+          scripts/config --enable CONFIG_DRM_TTM
+          scripts/config --enable CONFIG_DRM_TTM_HELPER
+          scripts/config --enable CONFIG_DRM_BUDDY
+          scripts/config --enable CONFIG_DRM_GEM_SHMEM_HELPER
+          scripts/config --enable CONFIG_DRM_SCHED
+          scripts/config --enable CONFIG_DRM_I915
+          scripts/config --enable CONFIG_DRM_I915_CAPTURE_ERROR
+          scripts/config --enable CONFIG_DRM_I915_COMPRESS_ERROR
+          scripts/config --enable CONFIG_DRM_I915_USERPTR
+
+          # 7. Evaluate configs using Clang 17
           make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 olddefconfig
           make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 prepare
+
+          echo "=== UTS Release ==="
           cat include/generated/utsrelease.h
+
+          echo "=== Key Config Check ==="
+          grep -E "CONFIG_DRM=|CONFIG_DRM_I915=|CONFIG_KSU=|CONFIG_MODVERSIONS=" .config || true
 
       - name: Compile Kernel Core (bzImage)
         run: |
@@ -97,6 +130,90 @@ jobs:
           name: bliss-kernel-6.1.112-exact-ksu-next-core
           path: kernel
           retention-days: 7
+
+  build-modules:
+    name: Build Kernel Modules
+    if: ${{ github.event.inputs.build_modules == 'true' || inputs.build_modules == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Clang 17 and Build Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            clang-17 lld-17 llvm-17 make gcc g++ \
+            bison flex libssl-dev libelf-dev bc \
+            cpio kmod zlib1g-dev python3 xz-utils
+          sudo ln -sf /usr/bin/clang-17 /usr/bin/clang
+          sudo ln -sf /usr/bin/clang++-17 /usr/bin/clang++
+          sudo ln -sf /usr/bin/ld.lld-17 /usr/bin/ld.lld
+          sudo ln -sf /usr/bin/llvm-ar-17 /usr/bin/llvm-ar
+          sudo ln -sf /usr/bin/llvm-nm-17 /usr/bin/llvm-nm
+          sudo ln -sf /usr/bin/llvm-objcopy-17 /usr/bin/llvm-objcopy
+          sudo ln -sf /usr/bin/llvm-objdump-17 /usr/bin/llvm-objdump
+          sudo ln -sf /usr/bin/llvm-readelf-17 /usr/bin/llvm-readelf
+          sudo ln -sf /usr/bin/llvm-strip-17 /usr/bin/llvm-strip
+
+      - name: Fetch Official Gloria Kernel (Branch gloria)
+        run: |
+          mkdir -p kernel_source
+          cd kernel_source
+          git init
+          git remote add origin https://github.com/hmtheboy154/Darkmatter-kernel.git
+          git fetch --depth 1 origin gloria
+          git checkout --force FETCH_HEAD
+
+      - name: Integrate KernelSU-Next
+        run: |
+          cd kernel_source
+          rm -rf drivers/kernelsu KernelSU KernelSU-Next
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/kernel/setup.sh" | bash -s -- dev
+          if [ -f drivers/kernelsu/core/init.c ]; then
+            sed -i 's/<asm\/cpufeature.h>/<asm\/cpufeatures.h>/' drivers/kernelsu/core/init.c
+          fi
+
+      - name: Configure Kernel and Hardware Features
+        run: |
+          cd kernel_source
+          sed -i 's/SYSCALL_HARDENING_ON;/SYSCALL_HARDENING_OFF;/g' arch/x86/kernel/cpu/common.c
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 112/' Makefile
+          sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
+          touch .scmversion
+          echo -n "" > .scmversion
+
+          if [ -f ../bliss_kernel.config ]; then
+            cp -f ../bliss_kernel.config .config
+          else
+            make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 android-x86_64_defconfig
+          fi
+
+          scripts/config --enable CONFIG_KSU
+          scripts/config --disable CONFIG_KSU_DEBUG
+          scripts/config --disable CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER
+          scripts/config --enable CONFIG_OVERLAY_FS
+          scripts/config --set-str CONFIG_LOCALVERSION "-gloria"
+          scripts/config --disable CONFIG_MODVERSIONS
+          scripts/config --disable CONFIG_ASM_MODVERSIONS
+          scripts/config --enable CONFIG_DRM
+          scripts/config --enable CONFIG_DRM_KMS_HELPER
+          scripts/config --enable CONFIG_DRM_DISPLAY_HELPER
+          scripts/config --enable CONFIG_DRM_DISPLAY_DP_HELPER
+          scripts/config --enable CONFIG_DRM_DISPLAY_HDCP_HELPER
+          scripts/config --enable CONFIG_DRM_DISPLAY_HDMI_HELPER
+          scripts/config --enable CONFIG_DRM_TTM
+          scripts/config --enable CONFIG_DRM_TTM_HELPER
+          scripts/config --enable CONFIG_DRM_BUDDY
+          scripts/config --enable CONFIG_DRM_GEM_SHMEM_HELPER
+          scripts/config --enable CONFIG_DRM_SCHED
+          scripts/config --enable CONFIG_DRM_I915
+          scripts/config --enable CONFIG_DRM_I915_CAPTURE_ERROR
+          scripts/config --enable CONFIG_DRM_I915_COMPRESS_ERROR
+          scripts/config --enable CONFIG_DRM_I915_USERPTR
+
+          make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 olddefconfig
+          make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 prepare
 
       - name: Compile and Package Kernel Modules
         run: |
