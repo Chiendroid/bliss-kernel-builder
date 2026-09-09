@@ -30,14 +30,10 @@ jobs:
       - name: Integrate KernelSU-Next
         run: |
           cd kernel_source
-          # Remove legacy KernelSU symlinks if present
-          rm -rf drivers/kernelsu KernelSU
-          # Inject latest KernelSU Next (using branch next which contains linux/init.h fix)
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s -- next
-          # Ensure linux/init.h is included in sulog.h
-          if [ -f drivers/kernelsu/feature/sulog.h ]; then
-            grep -q '<linux/init.h>' drivers/kernelsu/feature/sulog.h || sed -i '/linux\/types.h/a #include <linux/init.h>' drivers/kernelsu/feature/sulog.h
-          fi
+          # Remove legacy KernelSU symlinks or folders if present
+          rm -rf drivers/kernelsu KernelSU KernelSU-Next
+          # Inject KernelSU Next using dev branch (contains x86_64 patch syscall dispatcher)
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/kernel/setup.sh" | bash -s -- dev
 
       - name: Apply Tablet Hardware Configuration
         run: |
@@ -52,29 +48,38 @@ jobs:
           # Ensure KernelSU Next configs are active
           scripts/config --enable CONFIG_KSU
           scripts/config --disable CONFIG_KSU_DEBUG
+          scripts/config --enable CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER
           scripts/config --enable CONFIG_OVERLAY_FS
+          make ARCH=x86_64 olddefconfig
 
-      - name: Compile Linux Kernel (bzImage and Modules)
+      - name: Compile Kernel Core (bzImage)
         run: |
           cd kernel_source
-          make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 -j$(nproc) bzImage modules
-          mkdir -p ../modules_out
-          make ARCH=x86_64 INSTALL_MOD_PATH=../modules_out modules_install
+          make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 -j$(nproc) bzImage
+          cp -f arch/x86/boot/bzImage ../kernel
+          ls -lh ../kernel
 
-      - name: Prepare Final Output
-        run: |
-          cp -f kernel_source/arch/x86/boot/bzImage ./kernel
-          ls -lh ./kernel
-          cd modules_out/lib/modules
-          tar -czf ../../../modules.tar.gz .
-          cd ../../..
-          ls -lh ./modules.tar.gz
-
-      - name: Upload Kernel Artifact
+      - name: Upload Kernel Core Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bliss-kernel-6.1.112-ksu-next
-          path: |
-            kernel
-            modules.tar.gz
+          name: bliss-kernel-6.1.112-ksu-next-core
+          path: kernel
+          retention-days: 7
+
+      - name: Compile and Package Kernel Modules
+        run: |
+          cd kernel_source
+          make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 -j$(nproc) modules
+          mkdir -p ../modules_out
+          make ARCH=x86_64 INSTALL_MOD_PATH=../modules_out modules_install
+          cd ../modules_out/lib/modules
+          tar -czf ../../../modules.tar.gz .
+          cd ../../..
+          ls -lh modules.tar.gz
+
+      - name: Upload Kernel Modules Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bliss-kernel-6.1.112-ksu-next-modules
+          path: modules.tar.gz
           retention-days: 7
