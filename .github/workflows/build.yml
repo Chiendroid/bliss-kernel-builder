@@ -89,8 +89,7 @@ jobs:
           scripts/config --set-str CONFIG_LOCALVERSION "-gloria"
 
           # 5. Universal Module Compatibility: Patch version.c so ALL stock system modules (Wi-Fi, Bluetooth, Audio, etc.) load seamlessly
-          sed -i 's/Elf_Shdr \*sechdrs = info->sechdrs;/return 1;/' kernel/module/version.c
-          sed -i 's/return strcmp(amagic, bmagic) == 0;/return 1;/' kernel/module/version.c
+          python3 -c "import re; f=open('kernel/module/version.c','r'); c=f.read(); f.close(); p=r'int check_version\(const struct load_info \*info,[\s\S]*?bad_version:[\s\S]*?return 0;\s*}'; n='''int check_version(const struct load_info *info, const char *symname, struct module *mod, const s32 *crc)\n{\n\treturn 1;\n}'''; c, _ = re.subn(p, n, c); c, _ = re.subn(r'return strcmp\(amagic, bmagic\) == 0;', 'return 1;', c); f=open('kernel/module/version.c','w'); f.write(c); f.close(); print('[+] Patched kernel/module/version.c cleanly!')"
           scripts/config --enable CONFIG_MODVERSIONS
           scripts/config --enable CONFIG_ASM_MODVERSIONS
 
