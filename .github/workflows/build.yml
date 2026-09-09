@@ -18,7 +18,7 @@ jobs:
             bison flex libssl-dev libelf-dev bc \
             cpio kmod zlib1g-dev python3 xz-utils
 
-      - name: Fetch Exact Gloria Kernel 6.1.112 (Commit d41d398d)
+      - name: Fetch Exact Gloria Kernel (Commit d41d398d)
         run: |
           mkdir -p kernel_source
           cd kernel_source
@@ -32,12 +32,17 @@ jobs:
           cd kernel_source
           # Remove legacy KernelSU symlinks or folders if present
           rm -rf drivers/kernelsu KernelSU KernelSU-Next
-          # Inject KernelSU Next using dev branch (contains x86_64 patch syscall dispatcher)
+          # Inject KernelSU Next using dev branch
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/kernel/setup.sh" | bash -s -- dev
 
-      - name: Apply Tablet Hardware Configuration
+      - name: Apply Tablet Hardware Configuration and Exact Vermagic
         run: |
           cd kernel_source
+          # Lock exact version: 6.1.112-gloria-xanmod1 to match Bliss OS 15.9.2 stock drivers
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 112/' Makefile
+          sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
+          touch .scmversion
+          echo -n "" > .scmversion
           if [ -f ../bliss_kernel.config ]; then
             cp -f ../bliss_kernel.config .config
             echo "[+] Applied extracted bliss_kernel.config successfully!"
@@ -50,7 +55,11 @@ jobs:
           scripts/config --disable CONFIG_KSU_DEBUG
           scripts/config --enable CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER
           scripts/config --enable CONFIG_OVERLAY_FS
+          scripts/config --set-str CONFIG_LOCALVERSION "-gloria-xanmod1"
           make ARCH=x86_64 olddefconfig
+          # Verify UTS_RELEASE
+          make ARCH=x86_64 prepare
+          cat include/generated/utsrelease.h
 
       - name: Compile Kernel Core (bzImage)
         run: |
@@ -62,7 +71,7 @@ jobs:
       - name: Upload Kernel Core Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bliss-kernel-6.1.112-ksu-next-core
+          name: bliss-kernel-6.1.112-exact-ksu-next-core
           path: kernel
           retention-days: 7
 
@@ -80,6 +89,6 @@ jobs:
       - name: Upload Kernel Modules Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bliss-kernel-6.1.112-ksu-next-modules
+          name: bliss-kernel-6.1.112-exact-ksu-next-modules
           path: modules.tar.gz
           retention-days: 7
