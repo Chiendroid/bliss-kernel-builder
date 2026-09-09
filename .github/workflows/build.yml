@@ -18,9 +18,14 @@ jobs:
             bison flex libssl-dev libelf-dev bc \
             cpio kmod zlib1g-dev python3 xz-utils
 
-      - name: Clone Gloria Kernel 6.1
+      - name: Fetch Exact Gloria Kernel 6.1.112 (Commit d41d398d)
         run: |
-          git clone --depth=1 -b gloria https://github.com/hmtheboy154/Darkmatter-kernel.git kernel_source
+          mkdir -p kernel_source
+          cd kernel_source
+          git init
+          git remote add origin https://github.com/hmtheboy154/Darkmatter-kernel.git
+          git fetch --depth 1 origin d41d398db683c6ab289dd57fc2dd02badd51b86d || git fetch --filter=blob:none origin d41d398db683c6ab289dd57fc2dd02badd51b86d
+          git checkout --force FETCH_HEAD
 
       - name: Integrate KernelSU-Next
         run: |
@@ -49,19 +54,27 @@ jobs:
           scripts/config --disable CONFIG_KSU_DEBUG
           scripts/config --enable CONFIG_OVERLAY_FS
 
-      - name: Compile Linux Kernel (bzImage)
+      - name: Compile Linux Kernel (bzImage and Modules)
         run: |
           cd kernel_source
-          make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 -j$(nproc) bzImage
+          make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 -j$(nproc) bzImage modules
+          mkdir -p ../modules_out
+          make ARCH=x86_64 INSTALL_MOD_PATH=../modules_out modules_install
 
       - name: Prepare Final Output
         run: |
           cp -f kernel_source/arch/x86/boot/bzImage ./kernel
           ls -lh ./kernel
+          cd modules_out/lib/modules
+          tar -czf ../../../modules.tar.gz .
+          cd ../../..
+          ls -lh ./modules.tar.gz
 
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bliss-kernel-ksu-next
-          path: kernel
+          name: bliss-kernel-6.1.112-ksu-next
+          path: |
+            kernel
+            modules.tar.gz
           retention-days: 7
