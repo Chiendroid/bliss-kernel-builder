@@ -109,7 +109,23 @@ jobs:
           scripts/config --enable CONFIG_DRM_I915_COMPRESS_ERROR
           scripts/config --enable CONFIG_DRM_I915_USERPTR
 
-          # 7. Evaluate configs using Clang 17
+          # 7. Build Touchscreen & Stylus Pen (Wacom WACF2200 & Intel Serial IO I2C) DIRECTLY INTO KERNEL
+          scripts/config --enable CONFIG_I2C_DESIGNWARE_PCI
+          scripts/config --enable CONFIG_MFD_INTEL_LPSS
+          scripts/config --enable CONFIG_MFD_INTEL_LPSS_PCI
+          scripts/config --enable CONFIG_MFD_INTEL_LPSS_ACPI
+          scripts/config --enable CONFIG_I2C_HID_ACPI
+          scripts/config --enable CONFIG_I2C_HID_CORE
+          scripts/config --enable CONFIG_HID_MULTITOUCH
+          scripts/config --enable CONFIG_HID_WACOM
+          scripts/config --enable CONFIG_TOUCHSCREEN_WACOM_I2C
+          scripts/config --enable CONFIG_TOUCHSCREEN_WACOM_W8001
+          scripts/config --enable CONFIG_TOUCHSCREEN_GOODIX
+          scripts/config --enable CONFIG_TOUCHSCREEN_ELAN
+          scripts/config --enable CONFIG_TOUCHSCREEN_SILEAD
+          scripts/config --enable CONFIG_INTEL_ISH_HID
+
+          # 8. Evaluate configs using Clang 17
           make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 olddefconfig
           make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 prepare
 
@@ -117,7 +133,7 @@ jobs:
           cat include/generated/utsrelease.h
 
           echo "=== Key Config Check ==="
-          grep -E "CONFIG_DRM=|CONFIG_DRM_I915=|CONFIG_KSU=|CONFIG_MODVERSIONS=" .config || true
+          grep -E "CONFIG_DRM=|CONFIG_DRM_I915=|CONFIG_KSU=|CONFIG_HID_WACOM=|CONFIG_HID_MULTITOUCH=|CONFIG_I2C_DESIGNWARE_PCI=" .config || true
 
       - name: Compile Kernel Core (bzImage)
         run: |
