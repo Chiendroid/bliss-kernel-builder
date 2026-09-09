@@ -30,13 +30,13 @@ jobs:
           clang --version
           ld.lld --version
 
-      - name: Fetch Exact Gloria Kernel (Commit d41d398d)
+      - name: Fetch Official Gloria Kernel (Branch gloria)
         run: |
           mkdir -p kernel_source
           cd kernel_source
           git init
           git remote add origin https://github.com/hmtheboy154/Darkmatter-kernel.git
-          git fetch --depth 1 origin d41d398db683c6ab289dd57fc2dd02badd51b86d || git fetch --filter=blob:none origin d41d398db683c6ab289dd57fc2dd02badd51b86d
+          git fetch --depth 1 origin gloria
           git checkout --force FETCH_HEAD
 
       - name: Integrate KernelSU-Next
@@ -51,42 +51,19 @@ jobs:
             sed -i 's/<asm\/cpufeature.h>/<asm\/cpufeatures.h>/' drivers/kernelsu/core/init.c
           fi
 
-      - name: Apply Native Syscall Redirection Patches
+      - name: Configure Kernel and Default Syscall Hardening
         run: |
           cd kernel_source
           # 1. Set default syscall_hardening to OFF so X86_FEATURE_INDIRECT_SAFE is active by default
           sed -i 's/SYSCALL_HARDENING_ON;/SYSCALL_HARDENING_OFF;/g' arch/x86/kernel/cpu/common.c
 
-          # 2. Patch arch/x86/entry/common.c: include asm/cpufeatures.h and redirect syscalls directly to sys_call_table
-          python3 -c "
-          with open('arch/x86/entry/common.c', 'r') as f:
-              c = f.read()
-
-          if '#include <asm/cpufeatures.h>' not in c:
-              c = '#include <asm/cpufeatures.h>\n' + c
-
-          target = '''\tif (likely(unr < NR_syscalls)) {\n\t\tunr = array_index_nospec(unr, NR_syscalls);\n\t\tregs->ax = x64_sys_call(regs, unr);'''
-          replacement = '''\tif (likely(unr < NR_syscalls)) {\n\t\tunr = array_index_nospec(unr, NR_syscalls);\n\t\tif (likely(cpu_feature_enabled(X86_FEATURE_INDIRECT_SAFE)))\n\t\t\tregs->ax = sys_call_table[unr](regs);\n\t\telse\n\t\t\tregs->ax = x64_sys_call(regs, unr);'''
-
-          if target in c:
-              c = c.replace(target, replacement, 1)
-              with open('arch/x86/entry/common.c', 'w') as f:
-                  f.write(c)
-              print('[+] Patched arch/x86/entry/common.c successfully!')
-          else:
-              print('[!] Target pattern not found in common.c!')
-              exit(1)
-          "
-          git diff arch/x86/entry/common.c arch/x86/kernel/cpu/common.c
-
-      - name: Apply Tablet Hardware Configuration and Exact Vermagic
-        run: |
-          cd kernel_source
-          # Lock exact version: 6.1.112-gloria-xanmod1 to match Bliss OS 15.9.2 stock drivers
+          # 2. Lock exact version: 6.1.112-gloria-xanmod1 to match Bliss OS 15.9.2 stock drivers
           sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 112/' Makefile
           sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
           touch .scmversion
           echo -n "" > .scmversion
+
+          # 3. Apply extracted tablet hardware configuration
           if [ -f ../bliss_kernel.config ]; then
             cp -f ../bliss_kernel.config .config
             echo "[+] Applied extracted bliss_kernel.config successfully!"
@@ -94,14 +71,16 @@ jobs:
             make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 android-x86_64_defconfig
             echo "[+] Applied android-x86_64_defconfig!"
           fi
-          # Ensure KernelSU Next configs are active
+
+          # 4. Ensure KernelSU Next configs are active and disable runtime text patch
           scripts/config --enable CONFIG_KSU
           scripts/config --disable CONFIG_KSU_DEBUG
           scripts/config --disable CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER
           scripts/config --enable CONFIG_OVERLAY_FS
           scripts/config --set-str CONFIG_LOCALVERSION "-gloria-xanmod1"
+
+          # 5. Evaluate configs using Clang 17
           make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 olddefconfig
-          # Verify UTS_RELEASE
           make ARCH=x86_64 CC=clang LD=ld.lld LLVM=1 prepare
           cat include/generated/utsrelease.h
 
